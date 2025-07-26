@@ -29,7 +29,7 @@ today = datetime.date.today()
 
 for i in range(LOOKAHEAD_DAYS):
     date = today + datetime.timedelta(days=i)
-    st.subheader(f"\ud83d\udcc5 {date.strftime('%A, %d %B')}")
+   st.subheader(f"📅 {date.strftime('%A, %d %B')}")
 
     fixtures = get_fixtures_by_day(date)
 
