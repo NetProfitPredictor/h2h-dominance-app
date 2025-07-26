@@ -110,11 +110,18 @@ def apply_dominance_rules(h2hs, home_id, away_id):
 # Load and check matches
 for i in range(3):
     date = today + datetime.timedelta(days=i)
-    st.subheader(f"📅 {day.strftime('%A, %d %B')}")
-fixtures = get_fixtures_by_day(day)
+   for i in range(LOOKAHEAD_DAYS):
+    date = today + datetime.timedelta(days=i)
+    st.subheader(f"📅 {date.strftime('%A, %d %B')}")
 
-# 🔍 DEBUG PRINT
-st.write("🔍 Raw fixtures returned from API:", fixtures)
+    fixtures = get_fixtures_by_day(date)
+
+    # 🔍 DEBUG: Print raw fixture data returned by API-Football
+    st.write("🔍 Raw fixtures from API for this date:", fixtures)
+
+    if not fixtures:
+        st.info("⚠️ No fixtures found.")
+        continue
 
     fixtures = get_fixtures_by_day(date)
     st.subheader(f"📅 Matches for {date.strftime('%A, %d %B')} ({len(fixtures)} matches)")
