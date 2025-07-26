@@ -110,7 +110,7 @@ def apply_dominance_rules(h2hs, home_id, away_id):
 # Load and check matches
 for i in range(3):
     date = today + datetime.timedelta(days=i)
-   for i in range(LOOKAHEAD_DAYS):
+  for i in range(LOOKAHEAD_DAYS):
     date = today + datetime.timedelta(days=i)
     st.subheader(f"📅 {date.strftime('%A, %d %B')}")
 
