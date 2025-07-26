@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timedelta
 
 # --- Config ---
-MIN_H2H_MATCHES = 2  # Lowered from 4 to 2 for broader matching
+MIN_H2H_MATCHES = 2
 DAYS_AHEAD = 3
 
 # --- Dominance Rule Functions ---
@@ -39,9 +39,15 @@ def apply_d5(h2h):
 
 # --- Helper Functions ---
 def get_upcoming_matches():
-    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{datetime.now().strftime('%Y-%m-%d')}"
-    resp = requests.get(url)
-    return resp.json().get('events', [])
+    all_matches = []
+    for i in range(DAYS_AHEAD):
+        date_str = (datetime.now() + timedelta(days=i)).strftime('%Y-%m-%d')
+        url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            day_matches = resp.json().get('events', [])
+            all_matches.extend(day_matches)
+    return all_matches
 
 def get_h2h(home_id, away_id):
     url = f"https://api.sofascore.com/api/v1/event/{home_id}/h2h/{away_id}"
@@ -67,7 +73,7 @@ else:
         try:
             h2h_matches = get_h2h(home['id'], away['id'])
             if len(h2h_matches) < MIN_H2H_MATCHES:
-                continue  # Not enough H2H data
+                continue
 
             rules_triggered = []
             if apply_d1(h2h_matches):
