@@ -1,155 +1,93 @@
 import streamlit as st
-import pandas as pd
 import requests
 from datetime import datetime, timedelta
 
-# ------------------------ CONFIG ------------------------
-DOMINANCE_RULES = ['D1', 'D2', 'D4', 'D5']
-MIN_H2H_MATCHES = 4
-LOOKAHEAD_DAYS = 3
+# --- Config ---
+MIN_H2H_MATCHES = 2  # Lowered from 4 to 2 for broader matching
+DAYS_AHEAD = 3
 
-# ------------------------ APP ------------------------
-st.set_page_config(page_title="⚽ Daily Dominance Filter", layout="wide")
-st.title("⚽ Daily Dominance Filter - Sofascore")
-st.markdown("Filtering matches based on historical dominance and odds")
+# --- Dominance Rule Functions ---
+def apply_d1(h2h):
+    home_wins = sum(1 for m in h2h if m['homeScore']['current'] > m['awayScore']['current'] and m['homeTeam']['id'] == m['winnerTeam']['id'])
+    away_wins = sum(1 for m in h2h if m['awayScore']['current'] > m['homeScore']['current'] and m['awayTeam']['id'] == m['winnerTeam']['id'])
+    return home_wins > away_wins or away_wins > home_wins
 
-# ------------------------ UTILITIES ------------------------
-def fetch_fixtures():
-    today = datetime.utcnow().date()
-    to_date = today + timedelta(days=LOOKAHEAD_DAYS)
-    fixtures = []
-    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{today}/{to_date}"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        for event in data.get("events", []):
-            home = event['homeTeam']['name']
-            away = event['awayTeam']['name']
-            start = datetime.utcfromtimestamp(event['startTimestamp']).strftime('%Y-%m-%d %H:%M')
-            fixtures.append({
-                'id': event['id'],
-                'home': home,
-                'away': away,
-                'start_time': start
-            })
-    except:
-        st.error("⚠️ Could not fetch fixtures from Sofascore.")
-    return fixtures
+def apply_d2(h2h):
+    unbeaten_team = h2h[0]['homeTeam']['id'] if h2h[0]['homeTeam']['id'] == h2h[1]['homeTeam']['id'] else h2h[0]['awayTeam']['id']
+    for match in h2h:
+        if match['winnerTeam'] and match['winnerTeam']['id'] != unbeaten_team:
+            return False
+    return len(h2h) >= MIN_H2H_MATCHES
 
-def fetch_h2h(match_id):
-    url = f"https://api.sofascore.com/api/v1/event/{match_id}/h2h"
-    try:
-        response = requests.get(url)
-        h2h_matches = response.json().get('matches', [])
-        return h2h_matches
-    except:
-        return []
+def apply_d4(h2h, current_home_id):
+    home_matches = [m for m in h2h if m['homeTeam']['id'] == current_home_id]
+    return len(home_matches) >= MIN_H2H_MATCHES and all(m['homeScore']['current'] >= m['awayScore']['current'] for m in home_matches)
 
-def apply_dominance_rules(home, away, h2h_matches):
-    stats = {'D1': False, 'D2': False, 'D4': False, 'D5': False, 'rules_matched': []}
-    if len(h2h_matches) < MIN_H2H_MATCHES:
-        return stats
-
-    home_wins, away_wins, draws = 0, 0, 0
-    unbeaten_side = None
-    win_streak = None
-    home_h2h = []
-
-    for match in h2h_matches:
-        h = match['homeTeam']['name']
-        a = match['awayTeam']['name']
-        winner = match['winnerCode']
-        if winner == 1:
-            win = h
-        elif winner == 2:
-            win = a
-        else:
-            win = 'draw'
-
-        if win == home:
-            home_wins += 1
-        elif win == away:
-            away_wins += 1
-        else:
-            draws += 1
-
-        if h == home:
-            home_h2h.append((win, 'home'))
-        elif a == home:
-            home_h2h.append((win, 'away'))
-
-    # D1: Win Majority
-    if home_wins > away_wins:
-        stats['D1'] = True
-        stats['rules_matched'].append('D1')
-
-    # D2: Unbeaten Streak (last N all win/draw)
-    recent = h2h_matches[:MIN_H2H_MATCHES]
-    unbeaten = True
-    for match in recent:
-        h = match['homeTeam']['name']
-        a = match['awayTeam']['name']
-        winner = match['winnerCode']
-        if home == h:
-            result = 1 if winner == 1 else (0 if winner == 0 else -1)
-        elif home == a:
-            result = 1 if winner == 2 else (0 if winner == 0 else -1)
-        else:
-            result = -1
-        if result == -1:
-            unbeaten = False
-            break
-    if unbeaten:
-        stats['D2'] = True
-        stats['rules_matched'].append('D2')
-
-    # D4: Home/Away H2H dominance
-    home_side_wins = sum(1 for win, side in home_h2h if win == home)
-    if home_side_wins >= 3:
-        stats['D4'] = True
-        stats['rules_matched'].append('D4')
-
-    # D5: Winning streak (3+)
+def apply_d5(h2h):
+    last_team = None
     streak = 0
-    for match in h2h_matches:
-        h = match['homeTeam']['name']
-        a = match['awayTeam']['name']
-        winner = match['winnerCode']
-        if home == h and winner == 1:
-            streak += 1
-        elif home == a and winner == 2:
+    for match in h2h:
+        winner = match['winnerTeam']
+        if not winner:
+            break
+        if winner['id'] == last_team:
             streak += 1
         else:
-            break
-    if streak >= 3:
-        stats['D5'] = True
-        stats['rules_matched'].append('D5')
+            streak = 1
+            last_team = winner['id']
+    return streak >= 3
 
-    return stats
+# --- Helper Functions ---
+def get_upcoming_matches():
+    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{datetime.now().strftime('%Y-%m-%d')}"
+    resp = requests.get(url)
+    return resp.json().get('events', [])
 
-# ------------------------ MAIN ------------------------
-st.markdown("\n📅 Loading fixtures...")
-fixtures = fetch_fixtures()
-results = []
+def get_h2h(home_id, away_id):
+    url = f"https://api.sofascore.com/api/v1/event/{home_id}/h2h/{away_id}"
+    resp = requests.get(url)
+    return resp.json().get('matches', [])
 
-for fixture in fixtures:
-    h2h = fetch_h2h(fixture['id'])
-    if not h2h:
-        continue
-    dom_stats = apply_dominance_rules(fixture['home'], fixture['away'], h2h)
-    if len(dom_stats['rules_matched']) > 0:
-        results.append({
-            'Match': f"{fixture['home']} vs {fixture['away']}",
-            'Start Time': fixture['start_time'],
-            'Dominance Rules': ", ".join(dom_stats['rules_matched']),
-            'Score': len(dom_stats['rules_matched'])
-        })
+# --- Streamlit UI ---
+st.title("⚽ Daily Dominance Filter - Sofascore")
+st.write("Filtering matches based on historical dominance and odds")
 
-if results:
-    df = pd.DataFrame(results)
-    df = df.sort_values(by='Score', ascending=False)
-    st.success(f"✅ {len(df)} dominant matches found.")
-    st.dataframe(df, use_container_width=True)
-    st.download_button("Download CSV", df.to_csv(index=False), file_name="dominant_matches.csv")
+st.write("\n📅 Loading fixtures...")
+upcoming_matches = get_upcoming_matches()
+
+if not upcoming_matches:
+    st.warning("No upcoming matches found.")
 else:
-    st.warning("⚠️ No dominant matches found based on current criteria.")
+    count_displayed = 0
+    for match in upcoming_matches:
+        home = match['homeTeam']
+        away = match['awayTeam']
+        match_id = match['id']
+
+        try:
+            h2h_matches = get_h2h(home['id'], away['id'])
+            if len(h2h_matches) < MIN_H2H_MATCHES:
+                continue  # Not enough H2H data
+
+            rules_triggered = []
+            if apply_d1(h2h_matches):
+                rules_triggered.append("D1")
+            if apply_d2(h2h_matches):
+                rules_triggered.append("D2")
+            if apply_d4(h2h_matches, home['id']):
+                rules_triggered.append("D4")
+            if apply_d5(h2h_matches):
+                rules_triggered.append("D5")
+
+            if rules_triggered:
+                count_displayed += 1
+                st.markdown(f"### {home['name']} vs {away['name']}")
+                st.markdown(f"- Rules triggered: ✅ {' , '.join(rules_triggered)}")
+                st.markdown(f"- Dominance score: **{len(rules_triggered)} / 4**")
+                st.markdown("---")
+
+        except Exception as e:
+            st.write(f"Error processing match {home['name']} vs {away['name']}: {e}")
+
+    if count_displayed == 0:
+        st.warning("⚠️ No dominant matches found based on current criteria.")
