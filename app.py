@@ -27,8 +27,13 @@ st.markdown("Matches with historical dominance in next 3 days")
 
 today = datetime.date.today()
 
-for i in range(LOOKAHEAD_DAYS):
-    date = today + datetime.timedelta(days=i)
+date = today
+st.subheader(f"📅 {date.strftime('%A, %d %B')}")
+fixtures = get_fixtures_by_day(date)
+st.write("🔍 Raw fixtures from API for this date:", fixtures)
+
+if not fixtures:
+    st.info("⚠️ No fixtures found.")
     st.subheader(f"📅 {date.strftime('%A, %d %B')}")
 
     fixtures = get_fixtures_by_day(date)
