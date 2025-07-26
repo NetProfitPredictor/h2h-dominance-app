@@ -19,8 +19,16 @@ def get_fixtures_by_day(date):
     url = f"{API_BASE}/fixtures?date={date}"
     res = requests.get(url, headers=HEADERS)
     if res.status_code == 200:
-        return res.json().get("response", [])
-    return []
+        data = res.json().get("response", [])
+        st.markdown(f"🔍 **Raw fixtures from API for {date}:**")
+        if len(data) == 0:
+            st.warning("⚠️ No fixtures returned in API response.")
+        else:
+            st.write(data[:10])  # Show first 10 fixtures to inspect structure
+        return data
+    else:
+        st.error(f"❌ Failed to fetch fixtures. Status code: {res.status_code}")
+        return []
 
 def get_h2h(home_id, away_id):
     url = f"{API_BASE}/fixtures/headtohead?h2h={home_id}-{away_id}"
