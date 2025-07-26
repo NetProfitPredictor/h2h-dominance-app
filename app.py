@@ -29,7 +29,10 @@ today = datetime.date.today()
 
 date = today
 st.subheader(f"📅 {date.strftime('%A, %d %B')}")
+
 fixtures = get_fixtures_by_day(date)
+
+# 🔍 DEBUG: Print raw fixture data returned by API-Football
 st.write("🔍 Raw fixtures from API for this date:", fixtures)
 
 if not fixtures:
