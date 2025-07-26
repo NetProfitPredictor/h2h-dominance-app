@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import datetime
+import pandas as pd
 
 API_KEY = "a1e3317f95266baffbbbdaaba3e6890b"
 API_BASE = "https://v3.football.api-sports.io"
@@ -78,7 +79,7 @@ def check_d5_streak(h2h, team_id):
 for i in range(LOOKAHEAD_DAYS):
     date = today + datetime.timedelta(days=i)
     st.subheader(f"📅 {date.strftime('%A, %d %B')}")
-    
+
     fixtures = get_fixtures_by_day(date)
 
     if not fixtures:
@@ -109,20 +110,32 @@ for i in range(LOOKAHEAD_DAYS):
                 dominant_matches.append({
                     "match": f"{home['name']} vs {away['name']}",
                     "league": league,
-                    "rules": []
-                    + (["D1"] if d1 else [])
-                    + (["D2-H"] if d2_home else [])
-                    + (["D2-A"] if d2_away else [])
-                    + (["D4-H"] if d4_home else [])
-                    + (["D4-A"] if d4_away else [])
-                    + (["D5-H"] if d5_home else [])
-                    + (["D5-A"] if d5_away else [])
+                    "rules": ", ".join(
+                        []
+                        + (["D1"] if d1 else [])
+                        + (["D2-H"] if d2_home else [])
+                        + (["D2-A"] if d2_away else [])
+                        + (["D4-H"] if d4_home else [])
+                        + (["D4-A"] if d4_away else [])
+                        + (["D5-H"] if d5_home else [])
+                        + (["D5-A"] if d5_away else [])
+                    )
                 })
-        except:
+        except Exception as e:
             continue
 
     if not dominant_matches:
         st.info("⚠️ No dominant matches found based on current rules.")
     else:
         for match in dominant_matches:
-            st.markdown(f"✅ **{match['match']}** — {match['league']}  \n🧠 Rules Matched: `{', '.join(match['rules'])}`")
+            st.markdown(f"✅ **{match['match']}** — {match['league']}  \n🧠 Rules Matched: `{match['rules']}`")
+
+        # ✅ Export section
+        df = pd.DataFrame(dominant_matches)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Dominant Matches as CSV",
+            data=csv,
+            file_name=f"dominant_matches_{date}.csv",
+            mime="text/csv"
+        )
