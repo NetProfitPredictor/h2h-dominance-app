@@ -14,7 +14,7 @@ st.caption("Matches with historical dominance in next 3 days")
 
 today = datetime.date.today()
 LOOKAHEAD_DAYS = 3
-MIN_H2H = 3
+MIN_H2H = 1
 
 def get_fixtures_by_day(date):
     url = f"{BASE_URL}/fixtures"
