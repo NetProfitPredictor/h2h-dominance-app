@@ -2,7 +2,6 @@
 import streamlit as st
 import requests
 from datetime import datetime, timedelta
-from collections import Counter
 
 # Constants
 API_KEY = "a1e3317f95266baffbbbdaaba3e6890b"
@@ -21,13 +20,18 @@ def fetch_fixtures():
     today = datetime.now().date()
     end_date = today + timedelta(days=2)
     url = f"{API_BASE_URL}/fixtures?from={today}&to={end_date}"
-    res = requests.get(url, headers=HEADERS).json()
-    return res.get("response", [])
+    res = requests.get(url, headers=HEADERS)
+    if res.status_code != 200:
+        st.error("Failed to fetch fixtures from API-Football.")
+        return []
+    return res.json().get("response", [])
 
 def fetch_h2h(team1_id, team2_id):
     url = f"{API_BASE_URL}/fixtures/headtohead?h2h={team1_id}-{team2_id}"
-    res = requests.get(url, headers=HEADERS).json()
-    return res.get("response", [])
+    res = requests.get(url, headers=HEADERS)
+    if res.status_code != 200:
+        return []
+    return res.json().get("response", [])
 
 def fetch_lineups_and_injuries(fixture_id):
     lineup_url = f"{API_BASE_URL}/fixtures/lineups?fixture={fixture_id}"
@@ -42,9 +46,8 @@ def analyze_dominance(h2h_data, home_id, away_id):
 
     rules_satisfied = []
     total_matches = len(h2h_data)
-    home_wins = sum(1 for match in h2h_data if match['teams']['home']['id'] == home_id and match['teams']['home']['winner'])
-    away_wins = sum(1 for match in h2h_data if match['teams']['away']['id'] == away_id and match['teams']['away']['winner'])
-    draws = sum(1 for match in h2h_data if match['goals']['home'] == match['goals']['away'])
+    home_wins = sum(1 for match in h2h_data if match['teams']['home']['id'] == home_id and match['teams']['home'].get('winner') is True)
+    away_wins = sum(1 for match in h2h_data if match['teams']['away']['id'] == away_id and match['teams']['away'].get('winner') is True)
 
     # Rule D1
     if home_wins / total_matches >= 0.7:
@@ -54,12 +57,18 @@ def analyze_dominance(h2h_data, home_id, away_id):
 
     # Rule D2
     recent = h2h_data[:min(5, total_matches)]
-    home_unbeaten = all((m['teams']['home']['id'] == home_id and m['teams']['home']['winner']) or
-                        (m['teams']['away']['id'] == home_id and not m['teams']['home']['winner']) or
-                        (m['goals']['home'] == m['goals']['away']) for m in recent)
-    away_unbeaten = all((m['teams']['away']['id'] == away_id and m['teams']['away']['winner']) or
-                        (m['teams']['home']['id'] == away_id and not m['teams']['home']['winner']) or
-                        (m['goals']['home'] == m['goals']['away']) for m in recent)
+    home_unbeaten = all(
+        (match['teams']['home']['id'] == home_id and match['teams']['home'].get('winner') is True) or
+        (match['teams']['away']['id'] == home_id and match['teams']['away'].get('winner') is True) or
+        (match['goals']['home'] == match['goals']['away'])
+        for match in recent
+    )
+    away_unbeaten = all(
+        (match['teams']['away']['id'] == away_id and match['teams']['away'].get('winner') is True) or
+        (match['teams']['home']['id'] == away_id and match['teams']['home'].get('winner') is True) or
+        (match['goals']['home'] == match['goals']['away'])
+        for match in recent
+    )
     if home_unbeaten:
         rules_satisfied.append("D2 - Home")
     if away_unbeaten:
@@ -68,16 +77,16 @@ def analyze_dominance(h2h_data, home_id, away_id):
     # Rule D3
     home_venue_matches = [m for m in h2h_data if m['teams']['home']['id'] == home_id]
     away_venue_matches = [m for m in h2h_data if m['teams']['away']['id'] == away_id]
-    if home_venue_matches and all((m['teams']['home']['winner'] or m['goals']['home'] == m['goals']['away']) for m in home_venue_matches):
+    if home_venue_matches and all((m['teams']['home'].get('winner') is True or m['goals']['home'] == m['goals']['away']) for m in home_venue_matches):
         rules_satisfied.append("D3 - Home")
-    if away_venue_matches and all((m['teams']['away']['winner'] or m['goals']['home'] == m['goals']['away']) for m in away_venue_matches):
+    if away_venue_matches and all((m['teams']['away'].get('winner') is True or m['goals']['home'] == m['goals']['away']) for m in away_venue_matches):
         rules_satisfied.append("D3 - Away")
 
     # Rule D4
-    home_losses = sum(1 for m in h2h_data if (m['teams']['home']['id'] == home_id and not m['teams']['home']['winner']) or
-                      (m['teams']['away']['id'] == home_id and m['teams']['home']['winner']))
-    away_losses = sum(1 for m in h2h_data if (m['teams']['away']['id'] == away_id and not m['teams']['away']['winner']) or
-                      (m['teams']['home']['id'] == away_id and m['teams']['home']['winner']))
+    home_losses = sum(1 for m in h2h_data if (m['teams']['home']['id'] == home_id and m['teams']['home'].get('winner') is False) or
+                      (m['teams']['away']['id'] == home_id and m['teams']['away'].get('winner') is False))
+    away_losses = sum(1 for m in h2h_data if (m['teams']['away']['id'] == away_id and m['teams']['away'].get('winner') is False) or
+                      (m['teams']['home']['id'] == away_id and m['teams']['home'].get('winner') is False))
     if total_matches >= 12 and home_losses <= 4:
         rules_satisfied.append("D4 - Home")
     if total_matches >= 12 and away_losses <= 4:
@@ -90,8 +99,11 @@ def main():
     st.title("⚽ H2H Dominance Filter - Next 3 Days")
 
     fixtures = fetch_fixtures()
-    filtered_matches = []
+    if not fixtures:
+        st.warning("No fixtures found or API error.")
+        return
 
+    filtered_matches = []
     with st.spinner("Analyzing fixtures..."):
         for match in fixtures:
             fixture_id = match['fixture']['id']
