@@ -2,200 +2,226 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
-import asyncio
-import aiohttp
-import plotly.express as px
+from dateutil import parser
+import json
 
-# Configure API
-API_KEY = "a1e3317f95266baffbbbdaaba3e6890b"  # Your API-Football key
+# API-Football configuration
+API_KEY = "a1e3317f95266baffbbbdaaba3e6890b"
+API_HOST = "api-football-v1.p.rapidapi.com/v3"
+BASE_URL = "https://api-football-v1.p.rapidapi.com/v3"
 HEADERS = {
     "X-RapidAPI-Key": API_KEY,
-    "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+    "X-RapidAPI-Host": API_HOST
 }
 
-# --- Data Fetching Functions ---
-async def fetch_fixtures(session, date):
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-    params = {"date": date}
-    async with session.get(url, headers=HEADERS, params=params) as response:
-        return await response.json()
+# Function to fetch fixtures for the next 3 days
+def fetch_fixtures():
+    start_date = datetime.now().strftime("%Y-%m-%d")
+    end_date = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+    url = f"{BASE_URL}/fixtures?from={start_date}&to={end_date}"
+    try:
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("response"):
+            return data["response"]
+        return []
+    except requests.RequestException as e:
+        st.error(f"Error fetching fixtures: {e}")
+        return []
 
-async def fetch_h2h(session, team1_id, team2_id, last=10):
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures/headtohead"
-    params = {"h2h": f"{team1_id}-{team2_id}", "last": last}
-    async with session.get(url, headers=HEADERS, params=params) as response:
-        return await response.json()
+# Function to fetch H2H matches between two teams
+def fetch_h2h(team1_id, team2_id):
+    url = f"{BASE_URL}/fixtures/headtohead?h2h={team1_id}-{team2_id}"
+    try:
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("response"):
+            return data["response"]
+        return []
+    except requests.RequestException as e:
+        st.error(f"Error fetching H2H for teams {team1_id} vs {team2_id}: {e}")
+        return []
 
-async def fetch_lineup_injuries(session, fixture_id):
-    lineup_url = "https://api-football-v1.p.rapidapi.com/v3/fixtures/lineups"
-    injuries_url = "https://api-football-v1.p.rapidapi.com/v3/injuries"
-    params = {"fixture": fixture_id}
-    
-    async with session.get(lineup_url, headers=HEADERS, params=params) as response:
-        lineup = await response.json()
-    
-    async with session.get(injuries_url, headers=HEADERS, params=params) as response:
-        injuries = await response.json()
-    
-    return lineup, injuries
+# Function to fetch lineup and injury info for a fixture
+def fetch_lineup_and_injuries(fixture_id):
+    url = f"{BASE_URL}/fixtures/players?fixture={fixture_id}"
+    try:
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("response"):
+            return data["response"]
+        return []
+    except requests.RequestException as e:
+        st.error(f"Error fetching lineup/injuries for fixture {fixture_id}: {e}")
+        return []
 
-# --- Dominance Rules ---
-def apply_dominance_rules(h2h_data, home_id, away_id, venue):
-    if not h2h_data.get("response"):
-        return None
+# Analyze H2H dominance rules
+def analyze_h2h(h2h_matches, home_team, away_team, venue):
+    if len(h2h_matches) < 2:
+        return []
+
+    dominance_results = []
     
-    matches = h2h_data["response"]
-    home_wins = 0
-    draws = 0
-    home_venue_results = []
-    away_venue_results = []
+    # D1: Win majority (≥70% wins)
+    home_wins = sum(1 for match in h2h_matches if match["teams"]["home"]["winner"] and match["teams"]["home"]["name"] == home_team)
+    away_wins = sum(1 for match in h2h_matches if match["teams"]["away"]["winner"] and match["teams"]["away"]["name"] == away_team)
+    total_matches = len(h2h_matches)
+    home_win_pct = home_wins / total_matches if total_matches > 0 else 0
+    away_win_pct = away_wins / total_matches if total_matches > 0 else 0
     
-    for match in matches:
-        if match["teams"]["home"]["id"] == home_id:
-            if match["teams"]["home"]["winner"]:
-                home_wins += 1
-                home_venue_results.append("win")
-            elif match["teams"]["away"]["winner"]:
-                home_venue_results.append("loss")
-            else:
-                draws += 1
-                home_venue_results.append("draw")
+    if home_win_pct >= 0.7:
+        dominance_results.append(f"D1: {home_team} wins {home_win_pct:.0%} of H2H matches")
+    if away_win_pct >= 0.7:
+        dominance_results.append(f"D1: {away_team} wins {away_win_pct:.0%} of H2H matches")
+
+    # D2: Unbeaten streak in last N matches (N≥2)
+    last_n = min(5, len(h2h_matches))  # Check last 5 or fewer matches
+    if last_n >= 2:
+        recent_matches = h2h_matches[:last_n]
+        home_unbeaten = all(
+            match["teams"]["home"]["winner"] or match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"]
+            for match in recent_matches if match["teams"]["home"]["name"] == home_team
+        ) or all(
+            match["teams"]["away"]["winner"] or match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"]
+            for match in recent_matches if match["teams"]["away"]["name"] == home_team
+        )
+        away_unbeaten = all(
+            match["teams"]["away"]["winner"] or match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"]
+            for match in recent_matches if match["teams"]["away"]["name"] == away_team
+        ) or all(
+            match["teams"]["home"]["winner"] or match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"]
+            for match in recent_matches if match["teams"]["home"]["name"] == away_team
+        )
+        if home_unbeaten:
+            dominance_results.append(f"D2: {home_team} unbeaten in last {last_n} H2H matches")
+        if away_unbeaten:
+            dominance_results.append(f"D2: {away_team} unbeaten in last {last_n} H2H matches")
+
+    # D3: Home/Away H2H dominance
+    home_venue_matches = [m for m in h2h_matches if m["fixture"]["venue"]["name"] == venue]
+    if home_venue_matches:
+        home_unbeaten_venue = all(
+            m["teams"]["home"]["winner"] or m["score"]["fulltime"]["home"] == m["score"]["fulltime"]["away"]
+            for m in home_venue_matches if m["teams"]["home"]["name"] == home_team
+        )
+        if home_unbeaten_venue:
+            dominance_results.append(f"D3: {home_team} unbeaten in H2H matches at {venue}")
+
+    # D4: Trend (consistent wins regardless of form)
+    # Simplified: Check if one team has won at least 3 consecutive H2H matches
+    consecutive_wins = 0
+    last_winner = None
+    for match in h2h_matches[:5]:  # Check recent 5 matches
+        winner = match["teams"]["home"]["name"] if match["teams"]["home"]["winner"] else (
+            match["teams"]["away"]["name"] if match["teams"]["away"]["winner"] else None)
+        if winner == last_winner:
+            consecutive_wins += 1
         else:
-            if match["teams"]["away"]["winner"]:
-                home_wins += 1
-                away_venue_results.append("win")
-            elif match["teams"]["home"]["winner"]:
-                away_venue_results.append("loss")
-            else:
-                draws += 1
-                away_venue_results.append("draw")
-    
-    total_matches = len(matches)
-    win_rate = (home_wins / total_matches) * 100 if total_matches > 0 else 0
-    
-    # Rule D1: Win ≥70% of H2H
-    d1 = win_rate >= 70
-    
-    # Rule D2: Unbeaten in last N (≥2) matches
-    last_n = min(5, total_matches)
-    last_n_results = []
-    for match in matches[:last_n]:
-        if match["teams"]["home"]["id"] == home_id:
-            last_n_results.append("win" if match["teams"]["home"]["winner"] else "draw" if match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"] else "loss")
-        else:
-            last_n_results.append("win" if match["teams"]["away"]["winner"] else "draw" if match["score"]["fulltime"]["home"] == match["score"]["fulltime"]["away"] else "loss")
-    d2 = all(result in ["win", "draw"] for result in last_n_results) and last_n >= 2
-    
-    # Rule D3: Home/Away unbeaten
-    if venue == "home":
-        d3 = all(result in ["win", "draw"] for result in home_venue_results) if home_venue_results else False
-    else:
-        d3 = all(result in ["win", "draw"] for result in away_venue_results) if away_venue_results else False
-    
-    # Rule D4: Trend (≥3 wins in last 5)
-    d4 = home_wins >= 3 if total_matches >= 5 else False
-    
-    return {
-        "D1": d1, "D2": d2, "D3": d3, "D4": d4,
-        "Win Rate": win_rate,
-        "Last 5 Results": last_n_results[:5]
+            consecutive_wins = 1
+            last_winner = winner
+        if consecutive_wins >= 3 and last_winner:
+            dominance_results.append(f"D4: {last_winner} consistently beats opponent")
+            break
+
+    return dominance_results
+
+# Streamlit app
+st.set_page_config(page_title="H2H Dominance Football App", layout="wide")
+
+# Mobile-friendly CSS
+st.markdown("""
+    <style>
+    .stApp {
+        max-width: 100%;
+        padding: 1rem;
     }
+    .match-container {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        background-color: #f9f9f9;
+    }
+    .match-header {
+        font-size: 1.2rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    .details {
+        font-size: 0.9rem;
+        color: #555;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- Streamlit App ---
-st.set_page_config(layout="wide", page_title="H2H Dominance Analyzer")
-st.title("⚽ H2H Dominance Analyzer")
+st.title("Football H2H Dominance Analyzer")
+st.write("Matches satisfying D1, D2, D3, or D4 dominance rules for the next 3 days")
 
-# Sidebar controls
-st.sidebar.header("Settings")
-selected_dates = st.sidebar.multiselect(
-    "Select dates",
-    [(datetime.today() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)],
-    default=[(datetime.today() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
-)
+# Fetch fixtures
+with st.spinner("Fetching fixtures..."):
+    fixtures = fetch_fixtures()
 
-selected_rules = st.sidebar.multiselect(
-    "Dominance Rules",
-    ["D1 (Win ≥70%)", "D2 (Unbeaten streak)", "D3 (Home/Away dominance)", "D4 (Trend)"],
-    default=["D1 (Win ≥70%)", "D2 (Unbeaten streak)"]
-)
+if not fixtures:
+    st.warning("No fixtures found for the next 3 days.")
+else:
+    matches_with_dominance = []
+    for fixture in fixtures:
+        home_team = fixture["teams"]["home"]["name"]
+        away_team = fixture["teams"]["away"]["name"]
+        home_team_id = fixture["teams"]["home"]["id"]
+        away_team_id = fixture["teams"]["away"]["id"]
+        fixture_id = fixture["fixture"]["id"]
+        date = parser.parse(fixture["fixture"]["date"]).strftime("%Y-%m-%d %H:%M")
+        venue = fixture["fixture"]["venue"]["name"]
 
-min_h2h_matches = st.sidebar.slider("Minimum H2H matches", 2, 10, 5)
+        # Fetch H2H data
+        h2h_matches = fetch_h2h(home_team_id, away_team_id)
+        if len(h2h_matches) >= 2:
+            dominance = analyze_h2h(h2h_matches, home_team, away_team, venue)
+            if dominance:
+                # Fetch lineup and injury info
+                lineup_data = fetch_lineup_and_injuries(fixture_id)
+                lineup_info = []
+                for team_data in lineup_data:
+                    team_name = team_data["team"]["name"]
+                    players = team_data.get("players", [])
+                    injuries = [p["player"]["name"] for p in players if p["player"].get("reason") == "Injured"]
+                    lineup = [p["player"]["name"] for p in players if p["player"].get("reason") != "Injured"]
+                    lineup_info.append({
+                        "team": team_name,
+                        "lineup": lineup[:11] if lineup else ["Not available"],
+                        "injuries": injuries if injuries else ["None"]
+                    })
 
-# Main analysis
-if st.sidebar.button("Analyze Fixtures"):
-    async def main():
-        async with aiohttp.ClientSession() as session:
-            # Fetch fixtures
-            all_fixtures = []
-            for date in selected_dates:
-                fixtures = await fetch_fixtures(session, date)
-                if fixtures.get("response"):
-                    all_fixtures.extend(fixtures["response"])
-            
-            # Process fixtures
-            results = []
-            for fixture in all_fixtures[:30]:  # Limit to 30 for demo
-                home_team = fixture["teams"]["home"]["name"]
-                away_team = fixture["teams"]["away"]["name"]
-                home_id = fixture["teams"]["home"]["id"]
-                away_id = fixture["teams"]["away"]["id"]
-                venue = "home" if fixture["teams"]["home"]["id"] == home_id else "away"
-                
-                # Fetch H2H
-                h2h_data = await fetch_h2h(session, home_id, away_id, min_h2h_matches)
-                dominance = apply_dominance_rules(h2h_data, home_id, away_id, venue)
-                
-                if dominance and any(dominance[rule.split(" ")[0]] for rule in selected_rules):
-                    lineup, injuries = await fetch_lineup_injuries(session, fixture["fixture"]["id"])
-                    
-                    # Prepare result
-                    result = {
-                        "Match": f"{home_team} vs {away_team}",
-                        "Date": datetime.strptime(fixture["fixture"]["date"][:10], "%Y-%m-%d").strftime("%d %b"),
-                        "League": fixture["league"]["name"],
-                        "Venue": venue.capitalize(),
-                        "Win Rate": f"{dominance['Win Rate']:.1f}%",
-                        "Lineup": "✅" if lineup.get("response") else "❌",
-                        "Injuries": len(injuries.get("response", [])),
-                        "Last 5 Results": ", ".join(dominance["Last 5 Results"])
-                    }
-                    
-                    # Add rule-specific columns
-                    for rule in selected_rules:
-                        result[rule] = "✅" if dominance[rule.split(" ")[0]] else "❌"
-                    
-                    results.append(result)
-            
-            # Display results
-            if results:
-                df = pd.DataFrame(results)
-                df = df[["Match", "Date", "League", "Venue", "Win Rate"] + selected_rules + ["Last 5 Results", "Lineup", "Injuries"]]
-                
-                # Visualize
-                st.success(f"Found {len(results)} dominant matches!")
-                st.dataframe(df, hide_index=True, use_container_width=True)
-                
-                # Win rate distribution chart
-                fig = px.histogram(df, x="Win Rate", title="Win Rate Distribution of Dominant Teams")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("No dominant matches found for selected criteria!")
-    
-    asyncio.run(main())
+                matches_with_dominance.append({
+                    "match": f"{home_team} vs {away_team}",
+                    "date": date,
+                    "venue": venue,
+                    "dominance": dominance,
+                    "lineup": lineup_info
+                })
 
-# --- Instructions ---
-st.sidebar.markdown("""
-### How to Use
-1. Select dates (default: next 3 days)
-2. Choose dominance rules to apply
-3. Set minimum H2H matches (2-10)
-4. Click "Analyze Fixtures"
-
-### Dominance Rules
-- **D1**: Team wins ≥70% of all H2H matches
-- **D2**: Unbeaten in last N matches (N≥2)
-- **D3**: Unbeaten at current venue (home/away)
-- **D4**: Wins ≥3 of last 5 H2H matches
-""")
+    # Display results
+    if matches_with_dominance:
+        st.subheader("Matches with H2H Dominance")
+        for match in matches_with_dominance:
+            with st.container():
+                st.markdown(f"""
+                    <div class="match-container">
+                        <div class="match-header">{match['match']}</div>
+                        <div class="details">Date: {match['date']}</div>
+                        <div class="details">Venue: {match['venue']}</div>
+                        <div class="details">Dominance Rules: {', '.join(match['dominance'])}</div>
+                        <div class="details">Lineup & Injuries:</div>
+                """, unsafe_allow_html=True)
+                for team in match["lineup"]:
+                    st.markdown(f"""
+                        <div class="details">{team['team']} Lineup: {', '.join(team['lineup'])}</div>
+                        <div class="details">{team['team']} Injuries: {', '.join(team['injuries'])}</div>
+                    """, unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.info("No matches found satisfying the dominance rules.")
